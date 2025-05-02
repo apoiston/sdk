@@ -1,0 +1,99 @@
+name: build
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai 
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: set timezone
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date +"%Y-%m-%d %H:%M:%S"
+          
+      - name: system info
+        run: |
+          date +"%Y-%m-%d %H:%M:%S"
+          lscpu | grep -E '^Architecture|^CPU\(s\):|^Model name'
+          uname -sr
+          lsb_release -a
+          free -h
+
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: build
+        uses: apoiston/actions@sdk
+        with:
+          config_buildinfo: config/config.buildinfo
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          public-key: ${{ secrets.PUBLIC_KEY }}
+          custom_info: ${{ secrets.CUSTOM_INFO }}
+
+      - name: commit
+        run: |
+          cp -a openwrt/version.buildinfo config/
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add config/version.buildinfo
+          git commit -m "chore: update version on $(date +"%Y.%m.%d %H:%M:%S")"
+          git push origin main
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk
+          path: |
+            ./openwrt/apps/*
+
+      - name: version
+        run: |
+          echo "- version: $(grep 'version_code' ./openwrt/apps/version.txt | cut -d' ' -f2-)" > ./version.md
+          echo "- linux kernel: $(grep 'linux_kernel' ./openwrt/apps/version.txt | cut -d' ' -f2-)" >> ./version.md
+          echo "- vermagic: $(grep 'vermagic' ./openwrt/apps/version.txt | cut -d' ' -f2-)" >> ./version.md
+          echo "- gcc version: $(grep 'gcc_version' ./openwrt/apps/version.txt | cut -d' ' -f2-)" >> ./version.md
+          echo "- sha256: $(cut -d' ' -f1 ./openwrt/apps/sha256sums.txt)" >> ./version.md
+
+      - name: add tag
+        id: add_tag
+        run: |
+          git config user.name "github actions"
+          git config user.email "actions@github.com"
+          TAG="$(date '+%y.%m.%d')"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag -d "$TAG"
+            git push origin --delete "$TAG"
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./openwrt/apps/*
+          tag_name: ${{ steps.add_tag.outputs.tag }}
+          name: openwrt-sdk-x86-64 ${{ steps.add_tag.outputs.tag }}
+          body_path: ./version.md
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 1            
+          
